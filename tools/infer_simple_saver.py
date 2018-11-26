@@ -19,6 +19,7 @@
 (e.g., .jpg) in a folder.
 """
 
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -52,6 +53,40 @@ c2_utils.import_detectron_ops()
 # thread safe and causes unwanted GPU memory allocations.
 cv2.ocl.setUseOpenCL(False)
 
+#
+#from __future__ import absolute_import
+#from __future__ import division
+#from __future__ import print_function
+#from __future__ import unicode_literals
+#
+#from collections import defaultdict
+#import argparse
+#import cv2  # NOQA (Must import before importing caffe2 due to bug in cv2)
+#import glob
+#import logging
+#import os
+#import sys
+#import time
+#import json
+#
+#from caffe2.python import workspace
+#from pdb import set_trace
+#
+##from core.config import assert_and_infer_cfg
+##from core.config import cfg
+##from core.config import merge_cfg_from_file
+#from utils.timer import Timer
+#import core.test_engine as infer_engine
+#import datasets.dummy_datasets as dummy_datasets
+#import utils.c2 as c2_utils
+#import utils.logging
+#import utils.vis as vis_utils
+#
+#c2_utils.import_detectron_ops()
+## OpenCL may be enabled by default in OpenCV3; disable it because it's not
+## thread safe and causes unwanted GPU memory allocations.
+#cv2.ocl.setUseOpenCL(False)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='End-to-end inference')
@@ -84,20 +119,7 @@ def parse_args():
         type=str
     )
     parser.add_argument(
-        '--always-out',
-        dest='out_when_no_box',
-        help='output image even when no object is found',
-        action='store_true'
-    )
-    parser.add_argument(
         'im_or_folder', help='image or folder of images', default=None
-    )
-    parser.add_argument(
-        '--output-ext',
-        dest='output_ext',
-        help='output image file format (default: pdf)',
-        default='pdf',
-        type=str
     )
     if len(sys.argv) == 1:
         parser.print_help()
@@ -107,18 +129,11 @@ def parse_args():
 
 def main(args):
     logger = logging.getLogger(__name__)
-
     merge_cfg_from_file(args.cfg)
+    cfg.TEST.WEIGHTS = args.weights
     cfg.NUM_GPUS = 1
-    args.weights = cache_url(args.weights, cfg.DOWNLOAD_CACHE)
-    assert_and_infer_cfg(cache_urls=False)
-
-    assert not cfg.MODEL.RPN_ONLY, \
-        'RPN models are not supported'
-    assert not cfg.TEST.PRECOMPUTED_PROPOSALS, \
-        'Models that require precomputed proposals are not supported'
-
-    model = infer_engine.initialize_model_from_cfg(args.weights)
+    assert_and_infer_cfg()
+    model = infer_engine.initialize_model_from_cfg()
     dummy_coco_dataset = dummy_datasets.get_coco_dataset()
 
     if os.path.isdir(args.im_or_folder):
@@ -126,9 +141,14 @@ def main(args):
     else:
         im_list = [args.im_or_folder]
 
+    #Sort frames by number
+    im_list = list(im_list)
+    im_list.sort()
+    json_output = []
+
     for i, im_name in enumerate(im_list):
         out_name = os.path.join(
-            args.output_dir, '{}'.format(os.path.basename(im_name) + '.' + args.output_ext)
+            args.output_dir, '{}'.format(os.path.basename(im_name) + '.pdf')
         )
         logger.info('Processing {} -> {}'.format(im_name, out_name))
         im = cv2.imread(im_name)
@@ -147,23 +167,36 @@ def main(args):
                 'rest (caches and auto-tuning need to warm up)'
             )
 
-        vis_utils.vis_one_image(
-            im[:, :, ::-1],  # BGR -> RGB for visualization
-            im_name,
-            args.output_dir,
-            cls_boxes,
-            cls_segms,
-            cls_keyps,
-            dataset=dummy_coco_dataset,
-            box_alpha=0.3,
-            show_class=True,
-            thresh=0.7,
-            kp_thresh=2,
-            ext=args.output_ext,
-            out_when_no_box=args.out_when_no_box
-        )
-        print(cls_boxes)
-        in_ = raw_input('cls_boxes')
+        boxes, segms, keypoints, classes = vis_utils.convert_from_cls_format(
+            cls_boxes, cls_segms, cls_keyps)
+
+        if boxes is None:
+            boxes = []
+        else:
+            boxes = boxes.tolist()
+        
+        json_output.append({
+            'frame': i,
+            'boxes': boxes
+        })
+
+        # Skip writing PDF output
+        # vis_utils.vis_one_image(
+        #     im[:, :, ::-1],  # BGR -> RGB for visualization
+        #     im_name,
+        #     args.output_dir,
+        #     cls_boxes,
+        #     cls_segms,
+        #     cls_keyps,
+        #     dataset=dummy_coco_dataset,
+        #     box_alpha=0.3,
+        #     show_class=True,
+        #     thresh=0.7,
+        #     kp_thresh=2
+        # )
+
+    with open(args.output_dir + '/boxes.json', 'w') as outfile:
+        json.dump(json_output, outfile, indent=4)
 
 
 if __name__ == '__main__':
