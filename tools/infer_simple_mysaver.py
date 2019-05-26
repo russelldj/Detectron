@@ -27,6 +27,7 @@ from __future__ import unicode_literals
 from collections import defaultdict
 import argparse
 import cv2  # NOQA (Must import before importing caffe2 due to bug in cv2)
+import pdb
 import glob
 import logging
 import os
@@ -145,6 +146,7 @@ def main(args):
     model = infer_engine.initialize_model_from_cfg(args.weights)
     dummy_coco_dataset = dummy_datasets.get_coco_dataset()
 
+    pdb.set_trace()
     if os.path.isdir(args.im_or_folder):
         # MOD
         print(args.im_or_folder)
@@ -175,7 +177,7 @@ def main(args):
             masks = mask_util.decode(segms)
         else:
             masks = np.asarray([[[]]]) # an empty array with shape[2] == 0
-        all_contours = []
+        all_contours = [] # This might not be getting reset
         for mask_idx in range(masks.shape[2]):
             print("shapes are {}".format(masks[...,mask_idx].shape))
             _, contours, _ = cv2.findContours(masks[...,mask_idx].copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -213,7 +215,7 @@ def main(args):
                 'classes': classes,
                 'contours': [[c.tolist() for c in some_contours] for some_contours in all_contours]
             })
-            masks_output[i] = [[c.tolist() for c in some_contours] for some_contours in all_contours]# this will be a mapping from frame to contours
+            #masks_output[i] = [[c.tolist() for c in some_contours] for some_contours in all_contours]# this will be a mapping from frame to contours
         else:
             json_output.append({
                 'video': video,
@@ -223,8 +225,8 @@ def main(args):
                 'contours': [[c.tolist() for c in some_contours] for some_contours in all_contours]
             })
 
-        if i % 1000 == 0:
-            save_files(args, im_name, output_basename, mot_output, json_output, masks_output)
+        if i % 10 == 0:
+            save_files(args, im_name, output_basename, mot_output, json_output, masks_output) # so this keeps all the data in memory which seems terrible
 
         # MOD
         print('output name {}'.format(output_name))
@@ -258,14 +260,12 @@ def main(args):
     print('im_list is {}'.format(im_list))
     if args.is_video:
         for vid_ind, im_name in enumerate(im_list):
+            pdb.set_trace()
             # initialize the outputs
-            if args.mot_format:
-                # do some initialization, maybe the name of the file
-                mot_output = np.empty((0,10), float)#[[-1.0,-1.0,-1.0,-1.0,-1.0,-1.0,-1.0,-1.0,-1.0,1.0]]
-                masks_output = {}
-                json_output = []
-            else:
-                json_output = []
+            # do some initialization, maybe the name of the file
+            mot_output = np.empty((0,10), float) #TODO what is the point of this?
+            masks_output = {}
+            json_output = []
 
             cap = cv2.VideoCapture(im_name)
             ret, im = cap.read() 
@@ -282,6 +282,7 @@ def main(args):
 
             #write the data out
             #TODO get pylinter
+            #TODO save the data much more inteligently
 
     else:
         for i, im_name in enumerate(im_list):
@@ -307,16 +308,20 @@ def save_files(args, im_name, output_basename, mot_output, json_output, masks_ou
                  frame_id = frame_data["frame"]
                  if not str(frame_id) in outfile: # check if it's in the keys
                      outfile.create_dataset(str(frame_id), data=json.dumps(frame_data))
-             json_output = []
-
+        json_output = []
 
         #with h5py.File("{}/{}_only_masks.h5".format(args.output_dir,os.path.basename(im_name)), 'w') as outfile:
         #    #TODO the json data should only be encoded once
         #    outfile.create_dataset("data", data=json.dumps(masks_output))# TODO this can be decoded as json.loads(h5py.File("filename")["data"].value)
         
     else:
-        with open("{}/{}.json".format(args.output_dir,os.path.basename(im_name)), 'w') as outfile:
-            json.dump(json_output, outfile, indent=4)
+        with h5py.File("{}/{}.h5".format(args.output_dir,os.path.basename(im_name)), 'w') as outfile:
+             #outfile.create_dataset("data", data=json.dumps(json_output))
+             for frame_data in json_output:
+                 frame_id = frame_data["frame"]
+                 if not str(frame_id) in outfile: # check if it's in the keys
+                     outfile.create_dataset(str(frame_id), data=json.dumps(frame_data))
+        json_output = []
 
 
 if __name__ == '__main__':
