@@ -128,6 +128,21 @@ def parse_args():
         sys.exit(1)
     return parser.parse_args()
 
+def check_var_sizes():
+    def sizeof_fmt(num, suffix='B'):
+        ''' By Fred Cirera, after https://stackoverflow.com/a/1094933/1870254'''
+        for unit in ['','Ki','Mi','Gi','Ti','Pi','Ei','Zi']:
+            if abs(num) < 1024.0:
+                return "%3.1f%s%s" % (num, unit, suffix)
+            num /= 1024.0
+        return "%.1f%s%s" % (num, 'Yi', suffix)
+    with open("logfile.txt", "a+") as outfile:
+        for name, size in sorted(((name, sys.getsizeof(value)) for name,value in vars().items()),
+                                         key= lambda x: -x[1])[:10]:
+            outfile.write("{:>30}: {:>8}\n".format(name,sizeof_fmt(size)))
+        outfile.write("------------------")
+
+
 
 def main(args):
     logger = logging.getLogger(__name__)
@@ -146,18 +161,16 @@ def main(args):
     model = infer_engine.initialize_model_from_cfg(args.weights)
     dummy_coco_dataset = dummy_datasets.get_coco_dataset()
 
-    pdb.set_trace()
     if os.path.isdir(args.im_or_folder):
         # MOD
-        print(args.im_or_folder)
+        print("The folder to run on {}".format(args.im_or_folder))
         im_list = sorted(glob.iglob(args.im_or_folder + '/*.' + args.image_ext))
         print(im_list)
     else:
         im_list = [args.im_or_folder]
 
-    
     #I'm going to have a massive repetition of code because I can't think of a cleaner way to do it
-    def infer(im, i, output_name='None', video='None', mot_output=[]):
+    def infer(im, i, output_name='None', video='None', mot_output=[], json_output=[], masks_output=[]):
         timers = defaultdict(Timer)
         t = time.time()
         with c2_utils.NamedCudaScope(0):
@@ -172,23 +185,23 @@ def main(args):
                 'rest (caches and auto-tuning need to warm up)'
             )
         boxes, segms, keypoints, classes = vis_utils.convert_from_cls_format(cls_boxes, cls_segms, cls_keyps)
-
+    
         if segms is not None: 
             masks = mask_util.decode(segms)
         else:
             masks = np.asarray([[[]]]) # an empty array with shape[2] == 0
         all_contours = [] # This might not be getting reset
         for mask_idx in range(masks.shape[2]):
-            print("shapes are {}".format(masks[...,mask_idx].shape))
-            _, contours, _ = cv2.findContours(masks[...,mask_idx].copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            #print("shapes are {}".format(masks[...,mask_idx].shape))
+            _, contours, _ = cv2.findContours(masks[...,mask_idx].copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE) # why is this getting copied
             all_contours.append(contours) # this code is more general and allows for multiple contours, but there aren't any
-
+    
         if boxes is None:
             boxes = []
         else:
             boxes = boxes.tolist()
-            print(classes)
-
+            print("classes are {}".format(classes))
+    
         # create the mot formated row
         def mot_row(i, boxes, classes):
             """<frame>, <id=class>, <bb_left>, <bb_top>, <bb_width>, <bb_height>, <conf>, <x=-1>, <y=-1>, <z=-1>
@@ -201,7 +214,7 @@ def main(args):
                 # and that conf is where I think it is
                 out_ = np.append(out_, np.array([[i,classes[box_id], box_[0], box_[1], box_[2]-box_[0], box_[3]-box_[1], box_[4], -1.0, -1.0, -1.0]]), axis=0)
             return out_
-
+    
         if args.mot_format:
             #TODO actually write out the class o fthe detection
             try:
@@ -224,10 +237,17 @@ def main(args):
                 'classes': classes,
                 'contours': [[c.tolist() for c in some_contours] for some_contours in all_contours]
             })
-
-        if i % 10 == 0:
+    
+        if i % 100 == 0:
+            print("about to save files")
             save_files(args, im_name, output_basename, mot_output, json_output, masks_output) # so this keeps all the data in memory which seems terrible
-
+            json_output = []
+            mot_output = []
+            masks_output = []
+            if len(json_output) != 0 or len(masks_output)!=0 or len(mot_output)!=0:
+                import pdb
+                pdb.set_trace()
+    
         # MOD
         print('output name {}'.format(output_name))
         #HACK 
@@ -257,10 +277,11 @@ def main(args):
             # likely something should go here
         # end of infer
 
+
     print('im_list is {}'.format(im_list))
     if args.is_video:
         for vid_ind, im_name in enumerate(im_list):
-            pdb.set_trace()
+            #pdb.set_trace()
             # initialize the outputs
             # do some initialization, maybe the name of the file
             mot_output = np.empty((0,10), float) #TODO what is the point of this?
@@ -276,9 +297,26 @@ def main(args):
                 )
                 logger.info('Processing {} -> {}'.format(im_name, out_name))
                 output_basename = '{}_{:09d}'.format(os.path.basename(im_name), i)
-                mot_output = infer(im, i, output_basename, im_name, mot_output) # this writes the images so it is pretty hacky
+
+
+                mot_output = infer(im, i, output_basename, im_name, mot_output, json_output, masks_output) # this writes the images so it is pretty hacky
                 i += 1
                 ret, im = cap.read() 
+                if i % 50 == 0:
+                    def sizeof_fmt(num, suffix='B'):
+                        ''' By Fred Cirera, after https://stackoverflow.com/a/1094933/1870254'''
+                        for unit in ['','Ki','Mi','Gi','Ti','Pi','Ei','Zi']:
+                            if abs(num) < 1024.0:
+                                return "%3.1f%s%s" % (num, unit, suffix)
+                            num /= 1024.0
+                        return "%.1f%s%s" % (num, 'Yi', suffix)
+                    import pdb
+                    pdb.set_trace()
+                    with open("logfile.txt", "a+") as outfile:
+                        for name, size in sorted(((name, sys.getsizeof(value)) for name,value in locals().items()),
+                                                         key= lambda x: -x[1])[:10]:
+                            outfile.write("{:>30}: {:>9}\n".format(name,sizeof_fmt(size)))
+                        outfile.write("------------------")
 
             #write the data out
             #TODO get pylinter
@@ -297,31 +335,31 @@ def main(args):
 
 
 def save_files(args, im_name, output_basename, mot_output, json_output, masks_output):
+    #pdb.set_trace()
     if args.mot_format:
-        print(mot_output.shape)
-        #raw_input('{}/{}.npy'.format(os.path.basename(im_name)))
+        print("mot output.shape is {}".format(mot_output.shape))
         np.save('{}/{}.npy'.format(args.output_dir, os.path.basename(im_name)), mot_output)
 
         with h5py.File("{}/{}.h5".format(args.output_dir,os.path.basename(im_name)), 'w') as outfile:
              #outfile.create_dataset("data", data=json.dumps(json_output))
+             pdb.set_trace()
              for frame_data in json_output:
                  frame_id = frame_data["frame"]
                  if not str(frame_id) in outfile: # check if it's in the keys
                      outfile.create_dataset(str(frame_id), data=json.dumps(frame_data))
         json_output = []
-
-        #with h5py.File("{}/{}_only_masks.h5".format(args.output_dir,os.path.basename(im_name)), 'w') as outfile:
-        #    #TODO the json data should only be encoded once
-        #    outfile.create_dataset("data", data=json.dumps(masks_output))# TODO this can be decoded as json.loads(h5py.File("filename")["data"].value)
         
     else:
         with h5py.File("{}/{}.h5".format(args.output_dir,os.path.basename(im_name)), 'w') as outfile:
              #outfile.create_dataset("data", data=json.dumps(json_output))
+             pdb.set_trace()
              for frame_data in json_output:
                  frame_id = frame_data["frame"]
                  if not str(frame_id) in outfile: # check if it's in the keys
                      outfile.create_dataset(str(frame_id), data=json.dumps(frame_data))
-        json_output = []
+        json_output = [] # this doesn't actually change anything
+        mot_output = []
+        masks_output = []
 
 
 if __name__ == '__main__':
