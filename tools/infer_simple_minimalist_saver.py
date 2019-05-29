@@ -35,6 +35,7 @@ import time
 import pdb
 import json
 import h5py
+import numpy as np
 
 from caffe2.python import workspace
 import pycocotools.mask as mask_util
